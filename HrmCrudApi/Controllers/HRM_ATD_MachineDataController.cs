@@ -46,61 +46,107 @@ namespace HRM_Practise.Controllers
         [HttpPost("search")]
         public async Task<IActionResult> GetMachineDataWithDate( DataTableParameters2 parameters2)
         {
+
             try
             {
-                var query = _context.HRM_ATD_MachineDatas.AsNoTracking().AsQueryable();
-                int commonDay = 1, commonMonth = 1, commonYear = 1;
+                var draw = parameters2.Draw;
+                var start = parameters2.Start;
+                var length = parameters2.Length;
+                var sortColumn = "";
+                var sortColumnDirection = "";
 
+                foreach (var item in parameters2.Order)
+                {
+                    sortColumnDirection = item.Dir;
+                    sortColumn = item.Name;
+                }
+
+                var searchValue = parameters2.Search.Value;
+
+                // Define page size and skip for pagination
+                int pageSize = length ?? 0;
+                int skip = start ?? 0;
+                int recordsTotal = 0;
+
+                // Initial query
+                var query = _context.HRM_ATD_MachineDatas.AsQueryable();
+
+                // Optimize Date Filtering
                 if (!string.IsNullOrEmpty(parameters2.StartDate))
                 {
-                    var dateResult = ExtractDateComponents(parameters2.StartDate);
-                    if (dateResult.Success)
-                    {
-                        commonDay = dateResult.Day;
-                        commonMonth = dateResult.Month;
-                        commonYear = dateResult.Year ?? 1;
-                    }
-                    else if (int.TryParse(parameters2.StartDate, out int dateTemp))
+                    int commonDay = 1, commonMonth = 1, commonYear = 1;
+
+                    // Process the StartDate if needed
+                    if (int.TryParse(parameters2.StartDate, out int dateTemp))
                     {
                         if (parameters2.StartDate.Length >= 3)
-                        {
                             commonYear = dateTemp;
-                        }
                         else
                         {
                             commonDay = dateTemp;
                             if (dateTemp <= 12)
-                            {
                                 commonMonth = dateTemp;
-                            }
                         }
+                    }
+                    else
+                    {
+                        var resultDate = ExtractDateComponents(parameters2.StartDate);
+                        commonYear = Convert.ToInt16(resultDate.Year);
+                        commonMonth = Convert.ToInt16(resultDate.Month);
+                        commonDay = Convert.ToInt16(resultDate.Day);
+                    }
+
+                    // Apply date filter directly
+                    if (commonDay != 1 || commonYear != 1 || commonMonth != 1)
+                    {
+                        var dateFilter = new DateTime(commonYear, commonMonth, commonDay);
+                        query = query.Where(m => m.Date == dateFilter);
                     }
                 }
 
-                // Apply date filters
-                if (commonDay != 1 || commonYear != 1 || commonMonth != 1)
+                // Filter by MachineId if provided
+                if (!string.IsNullOrEmpty(parameters2.MachineId))
                 {
-                    ApplyDateFilters(ref query, commonDay, commonMonth, commonYear);
+                    query = query.Where(m => m.MachineId.Contains(parameters2.MachineId));
                 }
 
-                // Apply search
-                if (!string.IsNullOrEmpty(parameters2.Search?.Value))
+                // Apply Search Filter
+                if (!string.IsNullOrEmpty(searchValue))
                 {
-                    query = ApplySearch(query, parameters2.Search.Value);
+                    query = query.Where(m =>
+                        (m.FingerPrintId != null && m.FingerPrintId.Contains(searchValue)) ||
+                        (m.MachineId != null && m.MachineId.Contains(searchValue)) ||
+                        (m.HOALR != null && m.HOALR.Contains(searchValue))
+                    );
                 }
 
-                // Apply sorting
-                if (parameters2.Order?.Any() == true)
+                // Get total records count for pagination (before applying sorting)
+                recordsTotal = await query.CountAsync();
+
+                // Apply Sorting (only after all filters are applied)
+                if (!string.IsNullOrEmpty(sortColumn) && !string.IsNullOrEmpty(sortColumnDirection))
                 {
-                    query = ApplySorting(query, parameters2.Order.First());
+                    query = sortColumn.ToLower() switch
+                    {
+                        "fingerprint" => sortColumnDirection.ToLower() == "asc"
+                            ? query.OrderBy(m => m.FingerPrintId)
+                            : query.OrderByDescending(m => m.FingerPrintId),
+                        "machineid" => sortColumnDirection.ToLower() == "asc"
+                            ? query.OrderBy(m => m.MachineId)
+                            : query.OrderByDescending(m => m.MachineId),
+                        "date" => sortColumnDirection.ToLower() == "asc"
+                            ? query.OrderBy(m => m.Date)
+                            : query.OrderByDescending(m => m.Date),
+                        _ => sortColumnDirection.ToLower() == "asc"
+                            ? query.OrderBy(m => m.AutoId)
+                            : query.OrderByDescending(m => m.AutoId)
+                    };
                 }
 
-                var recordsTotal = await query.CountAsync();
-                var recordsFiltered = recordsTotal;
-
+                // Apply Pagination
                 var data = await query
-                    .Skip((int)parameters2.Start)
-                    .Take((int)parameters2.Length)
+                    .Skip(skip)
+                    .Take(pageSize)
                     .Select(m => new
                     {
                         m.AutoId,
@@ -114,17 +160,114 @@ namespace HRM_Practise.Controllers
                     })
                     .ToListAsync();
 
+                // Get filtered records count
+                var recordsFiltered = await query.CountAsync();
+
                 return Ok(new
                 {
-                    recordsFiltered,
-                    recordsTotal,
-                    data
+                    recordsFiltered = recordsFiltered,
+                    recordsTotal = recordsTotal,
+                    data = data
                 });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { error = "An error occurred while processing your request." });
+                // Log the exception here
+                return Ok(new
+                {
+                    draw = "0",
+                    recordsFiltered = 0,
+                    recordsTotal = 0,
+                    data = new List<object>(),
+                    error = "An error occurred while processing your request."
+                });
             }
+
+
+
+
+
+
+
+            //try
+            //{
+            //    var query = _context.HRM_ATD_MachineDatas.AsNoTracking().AsQueryable();
+            //    int commonDay = 1, commonMonth = 1, commonYear = 1;
+
+            //    if (!string.IsNullOrEmpty(parameters2.StartDate))
+            //    {
+            //        var dateResult = ExtractDateComponents(parameters2.StartDate);
+            //        if (dateResult.Success)
+            //        {
+            //            commonDay = dateResult.Day;
+            //            commonMonth = dateResult.Month;
+            //            commonYear = dateResult.Year ?? 1;
+            //        }
+            //        else if (int.TryParse(parameters2.StartDate, out int dateTemp))
+            //        {
+            //            if (parameters2.StartDate.Length >= 3)
+            //            {
+            //                commonYear = dateTemp;
+            //            }
+            //            else
+            //            {
+            //                commonDay = dateTemp;
+            //                if (dateTemp <= 12)
+            //                {
+            //                    commonMonth = dateTemp;
+            //                }
+            //            }
+            //        }
+            //    }
+
+            //    // Apply date filters
+            //    if (commonDay != 1 || commonYear != 1 || commonMonth != 1)
+            //    {
+            //        ApplyDateFilters(ref query, commonDay, commonMonth, commonYear);
+            //    }
+
+            //    // Apply search
+            //    if (!string.IsNullOrEmpty(parameters2.Search?.Value))
+            //    {
+            //        query = ApplySearch(query, parameters2.Search.Value);
+            //    }
+
+            //    // Apply sorting
+            //    if (parameters2.Order?.Any() == true)
+            //    {
+            //        query = ApplySorting(query, parameters2.Order.First());
+            //    }
+
+            //    var recordsTotal = await query.CountAsync();
+            //    var recordsFiltered = recordsTotal;
+
+            //    var data = await query
+            //        .Skip((int)parameters2.Start)
+            //        .Take((int)parameters2.Length)
+            //        .Select(m => new
+            //        {
+            //            m.AutoId,
+            //            m.FingerPrintId,
+            //            m.MachineId,
+            //            Date = m.Date.ToString("yyyy-MM-dd"),
+            //            Time = m.Time.ToString("HH:mm:ss"),
+            //            m.Latitude,
+            //            m.Longitude,
+            //            m.HOALR
+            //        })
+            //        .ToListAsync();
+
+            //    return Ok(new
+            //    {
+            //        recordsFiltered,
+            //        recordsTotal,
+            //        data
+            //    });
+            //}
+            //catch (Exception ex)
+            //{
+            //    return StatusCode(500, new { error = "An error occurred while processing your request." });
+            //}
         }
 
         // GET: api/HRM_ATD_MachineData/procedure
